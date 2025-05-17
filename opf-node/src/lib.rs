@@ -103,6 +103,9 @@ impl Node {
                 CommandObject::Keystore => {
                     send_event(&self.db_tx, Event::CommandKeystore(command)).await
                 }
+                CommandObject::Suggestion => {
+                    send_event(&self.db_tx, Event::CommandSuggestion(command)).await
+                }
                 CommandObject::Link => send_event(&self.db_tx, Event::CommandLink(command)).await,
                 CommandObject::None => match command.action {
                     CommandAction::Help => self.on_help().await,

@@ -20,6 +20,7 @@ pub mod link;
 pub mod metadata;
 pub mod module;
 pub mod port;
+pub mod suggestion;
 pub mod target;
 pub mod workspace;
 
@@ -61,6 +62,7 @@ pub enum CommandObject {
     Api,
     Workspace,
     Keystore,
+    Suggestion,
     Export(String),
     Module(String),
 }
@@ -72,6 +74,13 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyStore(pub HashMap<String, String>);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Suggestion {
+    pub suggestion_id: i32,
+    pub description: String,
+    pub command: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Target {

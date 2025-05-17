@@ -6,10 +6,14 @@ use log::info;
 use rand::{distributions::Alphanumeric, Rng};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::RwLock;
+use tokio::time;
 
 use opf_models::event::Event::{ResponseError, ResponseSimple};
 use opf_models::event::{send_event_to, Domain, Event};
-use opf_models::{KeyStore, Workspace};
+use opf_models::{KeyStore, Workspace, Suggestion};
+
+use llm::{builder::{LLMBackend, LLMBuilder}, chat::ChatMessage};
+use serde::Deserialize;
 
 use crate::store::DB;
 
@@ -21,6 +25,7 @@ mod store_link;
 mod store_module;
 mod store_target;
 mod store_workspace;
+mod store_suggestion;
 
 #[derive(Debug)]
 pub struct DBStore {
@@ -83,8 +88,12 @@ pub async fn new(node_tx: UnboundedSender<(Domain, Event)>) -> (UnboundedSender<
 impl DBStore {
     pub async fn launch(mut self) {
         info!("running database controller...");
+        let mut ai_interval = time::interval(std::time::Duration::from_secs(60));
         loop {
             tokio::select! {
+                _ = ai_interval.tick() => {
+                    self.ai_analyze().await;
+                },
                 Some(event) = self.self_rx.recv() => {
                     let db = match self.dbs.get_mut(&self.current_workspace) {
                         Some(db) => db,
@@ -144,6 +153,11 @@ impl DBStore {
                                 let _ = send_event_to(&self.node_tx, (Domain::CLI, ResponseError(e.to_string()))).await;
                             }
                         }
+                        Event::CommandSuggestion(command) => {
+                            if let Err(e) = db.on_suggestion_command(command).await {
+                                let _ = send_event_to(&self.node_tx, (Domain::CLI, ResponseError(e.to_string()))).await;
+                            }
+                        }
                         Event::LoadKeystore(keystore) => self.load_keystore(keystore).await,
                         _ => {
                             if let Err(e) = send_event_to(&self.node_tx, (Domain::CLI, event)).await {
@@ -158,5 +172,63 @@ impl DBStore {
 
     pub async fn load_keystore(&mut self, keystore: KeyStore) {
         self.keystore = Arc::new(RwLock::new(keystore));
+    }
+
+    async fn ai_analyze(&self) {
+        let db = match self.dbs.get(&self.current_workspace) {
+            Some(db) => db,
+            None => return,
+        };
+
+        let targets = db.targets.read().await;
+        if targets.is_empty() {
+            return;
+        }
+
+        let mut content = String::new();
+        for (_, target) in targets.iter() {
+            content.push_str(&format!(
+                "id={} type={} name={} meta={:?}\n",
+                target.target_id, target.target_type, target.target_name, target.meta
+            ));
+        }
+
+        let api_key = std::env::var("OPENAI_API_KEY").unwrap_or("sk-TESTKEY".into());
+        let llm = LLMBuilder::new()
+            .backend(LLMBackend::OpenAI)
+            .api_key(api_key)
+            .model("gpt-3.5-turbo")
+            .max_tokens(512)
+            .temperature(0.7)
+            .stream(false)
+            .build()
+            .expect("Failed to build LLM (OpenAI)");
+
+        let messages = vec![
+            ChatMessage::user()
+                .content(format!(
+                    "Analyze these targets and propose commands to improve the dataset. \
+Return only JSON array of objects {{\"description\":string,\"command\":string}}.\n{}",
+                    content
+                ))
+                .build(),
+        ];
+
+        #[derive(Deserialize)]
+        struct LlmSuggestion { description: String, command: String }
+
+        if let Ok(text) = llm.chat(&messages).await {
+            if let Ok(list) = serde_json::from_str::<Vec<LlmSuggestion>>(&text) {
+                let mut suggestions = db.suggestions.write().await;
+                for item in list {
+                    let id = (suggestions.len() + 1) as i32;
+                    suggestions.insert(
+                        id,
+                        Suggestion { suggestion_id: id, description: item.description, command: item.command },
+                    );
+                }
+                let _ = send_event_to(&self.node_tx, (Domain::CLI, Event::ResponseSimple("ai suggestions updated".into()))).await;
+            }
+        }
     }
 }

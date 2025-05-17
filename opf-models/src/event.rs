@@ -17,6 +17,7 @@ pub enum Event {
     CommandKeystore(Command),
     CommandExport(Command),
     CommandGroup(Command),
+    CommandSuggestion(Command),
     // Module variant
     PrepareModule((String, Command)),
     ExecuteModule((i32, Target, String, HashMap<String, String>)),
