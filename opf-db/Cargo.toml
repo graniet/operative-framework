@@ -17,3 +17,5 @@ chrono = "0.4.24"
 rand = "0.8.5"
 petgraph = "0.6.3"
 itertools = "0.10.5"
+serde_json = "1.0"
+llm = { version = "1.2.3", features = ["openai", "anthropic", "ollama", "deepseek", "xai", "phind", "google", "groq", "api"] }
